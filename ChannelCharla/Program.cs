@@ -10,3 +10,5 @@ var host = Host.CreateDefaultBuilder(args)
     .Build();
 
 await host.StartAsync();
+
+Console.ReadKey();
