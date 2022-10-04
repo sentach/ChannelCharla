@@ -56,7 +56,7 @@ namespace ChannelCharla
         {
             try
             {
-                var numero = _configuration.GetValue<int>("numLectoresBBDD") ?? 1;                               
+                var numero = _configuration.GetValue<int>("numLectoresBBDD");                               
                 var readerStringTask = Task.Run(ProccesChannelString);
                 var readEventTask = new Task[numero];
                 for(int i = 0; i < numero; i++)
