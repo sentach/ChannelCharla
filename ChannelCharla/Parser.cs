@@ -1,8 +1,11 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using ChannelCharla.Model;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Threading.Channels;
+using System.Xml.Linq;
 
 namespace ChannelCharla
 {
@@ -13,13 +16,16 @@ namespace ChannelCharla
         private const string rowstart = "<row ";
         private readonly IConfiguration _configuration;
         private readonly ILogger<Parser> _log;
-        private readonly Channel<string> _channel;
+        private readonly Channel<string> _channelString;
+        private readonly Channel<Evento> _eventChannel;
+
 
         public Parser(IConfiguration configuration, ILogger<Parser> logger)
         {
             _configuration = configuration;
             _log = logger;
-            _channel = Channel.CreateUnbounded<string>();
+            _channelString = Channel.CreateUnbounded<string>();
+            _eventChannel = Channel.CreateUnbounded<Evento>();
         }
 
         protected async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -50,7 +56,8 @@ namespace ChannelCharla
         {
             try
             {
-                var readerTask = Task.Run(ProccesChannel);
+                var readerStringTask = Task.Run(ProccesChannelString);
+                var readerEventTask = Task.Run(ProcessChannelEvents);
 
                 using var reader = new StreamReader(file);
                 string row = string.Empty;
@@ -70,34 +77,60 @@ namespace ChannelCharla
                     while (fin >= 0)
                     {
                         fin += rowend.Length;
-                        await _channel.Writer.WriteAsync(row[..fin]);
+                        await _channelString.Writer.WriteAsync(row[..fin]);
                         row = row[fin..];
                         fin = row.IndexOf(rowend);
                     }
 
                 }
-                _channel.Writer.Complete();
-                readerTask.Wait();
+                _channelString.Writer.Complete();
+                readerStringTask.Wait();
+                _eventChannel.Writer.Complete();
+                readerEventTask.Wait();
             }
             catch (Exception ex)
             {
                 _log.LogError("Excepcion {ex}", ex);
             }
         }
-
-        private async Task ProccesChannel()
+                
+        private async Task ProccesChannelString()
         {
-            _log.LogInformation("Comienzo del reader");
-            int numero = 1;
-            await foreach (var item in _channel.Reader.ReadAllAsync())
+            _log.LogInformation("Comienzo del reader elementos");            
+            await foreach (var item in _channelString.Reader.ReadAllAsync())
             {
-                var inicio = item.IndexOf('"');
-                var fin = item.IndexOf('"', inicio + 1);
-                var num = item.Substring(inicio + 1, fin - inicio - 1);
-                _ = int.TryParse(num, out int result);
-                _log.LogInformation("Numero encontrado {result} vamos por {numero}", result, numero++);
+                var xml = XDocument.Parse(item);
+
+                var evento = new Evento
+                {
+                    Indice = Convert.ToInt32(xml.Root.Attribute("num")?.Value ?? "0"),
+                    Nombre = xml.Root.Element("documentname")?.Value ?? string.Empty,
+                    Inicio = Convert.ToDateTime(xml.Root.Element("eventstartdate")?.Value),
+                    Finalizacion = Convert.ToDateTime(xml.Root.Element("eventenddate").Value),
+                    Provincia = xml.Root.Element("territory")?.Value ?? "",
+                    Municipio = xml.Root.Element("municipality")?.Value ?? "",
+                    Direccion = xml.Root.Element("address")?.Value ?? ""
+                };
+                await _eventChannel.Writer.WriteAsync(evento);
             }
-            _log.LogInformation("Fin del reader");
+            _log.LogInformation("Fin del reader elementos");
+        }
+
+        private async Task ProcessChannelEvents()
+        {
+            _log.LogInformation("Comienzo reader channel BBDD");
+
+            using var conn = new SqlConnection(_configuration.GetConnectionString("channel"));
+            conn.Open();
+            await foreach(var evento in _eventChannel.Reader.ReadAllAsync())
+            {
+                var sql = "INSERT INTO [dbo].[Eventos]([Indice],[Nombre],[Inicio],[Finalizacion],[Provincia],[Municipio],[Direccion]) " +
+                    $"VALUES({evento.Indice},'{evento.Nombre}','{evento.Inicio:yyyy-MM-dd}','{evento.Finalizacion:yyyy-MM-dd}','{evento.Provincia}','{evento.Municipio}','{evento.Direccion}')";
+                using var cmd = new SqlCommand(sql, conn);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            _log.LogInformation("Fin reader channel BBDD");
         }
 
         public Task StartAsync(CancellationToken cancellationToken)
