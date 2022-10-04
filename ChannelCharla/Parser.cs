@@ -56,11 +56,13 @@ namespace ChannelCharla
         {
             try
             {
+                var numero = _configuration.GetValue<int>("numLectoresBBDD") ?? 1;                               
                 var readerStringTask = Task.Run(ProccesChannelString);
-                var readerEventTask1 = Task.Run(ProcessChannelEvents);
-                var readerEventTask2 = Task.Run(ProcessChannelEvents);
-                var readerEventTask3 = Task.Run(ProcessChannelEvents);
-
+                var readEventTask = new Task[numero];
+                for(int i = 0; i < numero; i++)
+                {
+                    readEventTask[i] = Task.Run(ProcessChannelEvents);
+                }
 
                 using var reader = new StreamReader(file);
                 string row = string.Empty;
@@ -89,7 +91,7 @@ namespace ChannelCharla
                 _channelString.Writer.Complete();
                 readerStringTask.Wait();
                 _eventChannel.Writer.Complete();
-                Task.WaitAll(readerEventTask1, readerEventTask2, readerEventTask3);
+                Task.WaitAll(readEventTask);
             }
             catch (Exception ex)
             {
