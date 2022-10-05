@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Data.SqlClient;
 using System.Diagnostics;
+using System.Net;
 using System.Threading.Channels;
 using System.Xml.Linq;
 
@@ -56,10 +57,16 @@ namespace ChannelCharla
         {
             try
             {
-                var numero = _configuration.GetValue<int>("numLectoresBBDD");                               
-                var readerStringTask = Task.Run(ProccesChannelString);
-                var readEventTask = new Task[numero];
-                for(int i = 0; i < numero; i++)
+                var numeroStr = _configuration.GetValue<int>("numLectoresXml");
+                var numeroBBDD = _configuration.GetValue<int>("numLectoresBBDD");
+
+                var readerStringTask = new Task[numeroStr];
+                for(int i=0;i<numeroStr;i++)
+                {
+                    readerStringTask[i] = Task.Run(ProccesChannelString);
+                }
+                var readEventTask = new Task[numeroBBDD];
+                for(int i = 0; i < numeroBBDD; i++)
                 {
                     readEventTask[i] = Task.Run(ProcessChannelEvents);
                 }
@@ -89,7 +96,7 @@ namespace ChannelCharla
 
                 }
                 _channelString.Writer.Complete();
-                readerStringTask.Wait();
+                Task.WaitAll(readerStringTask);
                 _eventChannel.Writer.Complete();
                 Task.WaitAll(readEventTask);
             }
@@ -116,6 +123,18 @@ namespace ChannelCharla
                     Municipio = xml.Root.Element("municipality")?.Value ?? "",
                     Direccion = xml.Root.Element("address")?.Value ?? ""
                 };
+                var url = xml.Root.Element("dataxml")?.Value;
+                if (!string.IsNullOrEmpty(url))
+                {
+                    var httpClient = new HttpClient();
+                    var result = await httpClient.GetAsync(url);
+                    if (result.StatusCode == HttpStatusCode.OK)
+                    {
+                        var xmlDesc = XDocument.Load(await result.Content.ReadAsStreamAsync());
+                        evento.Descripcion = xmlDesc.Root?.Element("eventDescription")?.Value.Replace("'", "''") ?? "";
+                    }
+                    else { evento.Descripcion = ""; }
+                }
                 await _eventChannel.Writer.WriteAsync(evento);
             }
             _log.LogInformation("Fin del reader elementos");
@@ -133,6 +152,7 @@ namespace ChannelCharla
                     $"VALUES({evento.Indice},'{evento.Nombre}','{evento.Inicio:yyyy-MM-dd}','{evento.Finalizacion:yyyy-MM-dd}','{evento.Provincia}','{evento.Municipio}','{evento.Direccion}')";
                 using var cmd = new SqlCommand(sql, conn);
                 await cmd.ExecuteNonQueryAsync();
+                _log.LogInformation("Insertado elemento {indice}", evento.Indice);
             }
 
             _log.LogInformation("Fin reader channel BBDD");
