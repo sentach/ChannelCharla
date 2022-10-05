@@ -1,7 +1,12 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using ChannelCharla.Model;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System.Data.SqlClient;
+using System.Data.SqlTypes;
 using System.Diagnostics;
+using System.Net;
+using System.Xml.Linq;
 
 namespace ChannelCharla
 {
@@ -48,8 +53,8 @@ namespace ChannelCharla
         {
             try
             {
-                _log.LogInformation("El fichero es {file}", file);
-
+                using var conn = new SqlConnection(_configuration.GetConnectionString("channel"));
+                conn.Open();
                 using var reader = new StreamReader(file);
                 string row = string.Empty;
                 while (!reader.EndOfStream)
@@ -68,7 +73,7 @@ namespace ChannelCharla
                     while (fin >= 0)
                     {
                         fin += rowend.Length;
-                        ProcessInfo(row[..fin]);
+                        await ProcessInfoAsync(row[..fin], conn);
                         row = row[fin..];
                         fin = row.IndexOf(rowend);
                     }
@@ -82,16 +87,38 @@ namespace ChannelCharla
             }
         }
 
-        private void ProcessInfo(string item)
+        private async Task ProcessInfoAsync(string item, SqlConnection conn)
         {
-            _log.LogInformation("Comienzo del reader");
+            var xml = XDocument.Parse(item);
 
-            var inicio = item.IndexOf('"');
-            var fin = item.IndexOf('"', inicio + 1);
-            var num = item.Substring(inicio + 1, fin - inicio - 1);
-            _ = int.TryParse(num, out int result);
-            _log.LogInformation("Numero encontrado {result} vamos por {numero}", result, numero++);
+            var evento = new Evento
+            {
+                Indice = Convert.ToInt32(xml.Root.Attribute("num")?.Value ?? "0"),
+                Nombre = xml.Root.Element("documentname")?.Value ?? string.Empty,
+                Inicio = Convert.ToDateTime(xml.Root.Element("eventstartdate")?.Value),
+                Finalizacion = Convert.ToDateTime(xml.Root.Element("eventenddate").Value),
+                Provincia = xml.Root.Element("territory")?.Value ?? "",
+                Municipio = xml.Root.Element("municipality")?.Value ?? "",
+                Direccion = xml.Root.Element("address")?.Value ?? ""
+            };
+            var url = xml.Root.Element("dataxml")?.Value;
+            if(!string.IsNullOrEmpty(url))
+            {
+                var httpClient = new HttpClient();
+                var result = await httpClient.GetAsync(url);
+                if (result.StatusCode == HttpStatusCode.OK)
+                {
+                    var xmlDesc = XDocument.Load(await result.Content.ReadAsStreamAsync());
+                    evento.Descripcion = xmlDesc.Root?.Element("eventDescription")?.Value.Replace("'", "''") ?? "";
+                }
+                else { evento.Descripcion = ""; }
+            }
 
+            var sql = "INSERT INTO [dbo].[Eventos]([Indice],[Nombre],[Inicio],[Finalizacion],[Provincia],[Municipio],[Direccion],[Descripcion]) " +
+                    $"VALUES({evento.Indice},'{evento.Nombre}','{evento.Inicio:yyyy-MM-dd}','{evento.Finalizacion:yyyy-MM-dd}','{evento.Provincia}','{evento.Municipio}','{evento.Direccion}', '{evento.Descripcion}')";
+            using var cmd = new SqlCommand(sql, conn);
+            await cmd.ExecuteNonQueryAsync();
+            _log.LogInformation("Insertado elemento {indice}", evento.Indice);
         }
 
         public Task StartAsync(CancellationToken cancellationToken)
