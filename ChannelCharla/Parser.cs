@@ -48,8 +48,6 @@ namespace ChannelCharla
         {
             try
             {
-                _log.LogInformation("El fichero es {file}", file);
-
                 using var reader = new StreamReader(file);
                 string row = string.Empty;
                 while (!reader.EndOfStream)
