@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Data.SqlClient;
 using System.Diagnostics;
+using System.Net;
 using System.Threading.Channels;
 using System.Xml.Linq;
 
@@ -111,6 +112,18 @@ namespace ChannelCharla
                     Municipio = xml.Root.Element("municipality")?.Value ?? "",
                     Direccion = xml.Root.Element("address")?.Value ?? ""
                 };
+                var url = xml.Root.Element("dataxml")?.Value;
+                if (!string.IsNullOrEmpty(url))
+                {
+                    var httpClient = new HttpClient();
+                    var result = await httpClient.GetAsync(url);
+                    if (result.StatusCode == HttpStatusCode.OK)
+                    {
+                        var xmlDesc = XDocument.Load(await result.Content.ReadAsStreamAsync());
+                        evento.Descripcion = xmlDesc.Root?.Element("eventDescription")?.Value.Replace("'", "''") ?? "";
+                    }
+                    else { evento.Descripcion = ""; }
+                }
                 await _eventChannel.Writer.WriteAsync(evento);
             }
             _log.LogInformation("Fin del reader elementos");
@@ -128,6 +141,7 @@ namespace ChannelCharla
                     $"VALUES({evento.Indice},'{evento.Nombre}','{evento.Inicio:yyyy-MM-dd}','{evento.Finalizacion:yyyy-MM-dd}','{evento.Provincia}','{evento.Municipio}','{evento.Direccion}')";
                 using var cmd = new SqlCommand(sql, conn);
                 await cmd.ExecuteNonQueryAsync();
+                _log.LogInformation("Insertado elemento {indice}", evento.Indice);
             }
 
             _log.LogInformation("Fin reader channel BBDD");

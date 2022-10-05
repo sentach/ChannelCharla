@@ -9,5 +9,6 @@
         public string? Provincia { get; set; }
         public string? Municipio { get; set; }
         public string? Direccion { get; set; }
+        public string? Descripcion { get; set; }
     }
 }
